@@ -4,17 +4,15 @@ import platform
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
 from datetime import datetime, timedelta
 import pandas as pd
 import time
 import threading
 import os
 
-# --- Configuration e-mail ---
+# --- Configuration ---
 EMAIL_EXPEDITEUR = "expediteur@exemple.com"
-EMAIL_MDP_APP = "mdpappsansespace"
+EMAIL_MDP_APP = "mdpexemple"
 EMAIL_DESTINATAIRE = "destinataire@exemple.com"
 
 CSV_PATH = "equipements.csv"
@@ -22,19 +20,19 @@ LOG_FILE = "log_surveillance.txt"
 SCAN_FREQUENCE_MIN = 1
 ANTI_SPAM_MIN = 60
 
-derniers_alertes = {}  # {ip: datetime}
+derniers_alertes = {}
 surveillance_active = True
 
-# --- Application Tkinter ---
+# --- Interface graphique ---
 app = tk.Tk()
-app.title("Surveillance Automatique Réseau")
+app.title("Surveillance Réseau Automatisée")
 app.geometry("800x500")
 
 log_text = tk.Text(app, height=25, wrap="word")
 log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 log_text.config(state=tk.DISABLED)
 
-# --- Fonctions ---
+# --- Log écran + fichier ---
 def log(message, couleur="black"):
     timestamp = datetime.now().strftime("%H:%M:%S")
     ligne = f"[{timestamp}] {message}"
@@ -46,32 +44,26 @@ def log(message, couleur="black"):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(ligne + "\n")
 
+# --- Envoi de mail (sans pièce jointe) ---
 def envoyer_mail(nom, ip):
     try:
         msg = MIMEMultipart()
         msg["From"] = EMAIL_EXPEDITEUR
         msg["To"] = EMAIL_DESTINATAIRE
         msg["Subject"] = f"Alerte : {nom} ({ip}) injoignable"
-        corps = f"L'hôte {nom} ({ip}) ne répond pas après 4 tentatives de ping.\nVoir log joint pour détails."
+        corps = f"L'hôte {nom} ({ip}) ne répond pas après 4 tentatives de ping."
         msg.attach(MIMEText(corps, "plain"))
-
-        if os.path.exists(LOG_FILE):
-            with open(LOG_FILE, "rb") as f:
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f"attachment; filename={LOG_FILE}")
-                msg.attach(part)
 
         with smtplib.SMTP("smtp.gmail.com", 587) as serveur:
             serveur.starttls()
             serveur.login(EMAIL_EXPEDITEUR, EMAIL_MDP_APP)
             serveur.send_message(msg)
 
-        log(f"Mail envoyé pour {nom} ({ip}) avec le journal", "red")
+        log(f"Mail envoyé pour {nom} ({ip})", "red")
     except Exception as e:
         log(f"Erreur envoi mail : {e}", "red")
 
+# --- Fonction ping ---
 def ping_host(ip):
     param = "-n" if platform.system().lower() == "windows" else "-c"
     for _ in range(4):
@@ -84,6 +76,7 @@ def ping_host(ip):
         time.sleep(1)
     return False
 
+# --- Boucle de surveillance ---
 def surveiller():
     global surveillance_active
     while surveillance_active:
@@ -95,16 +88,20 @@ def surveiller():
         try:
             df = pd.read_csv(CSV_PATH)
             if "hostname" not in df.columns or "ip" not in df.columns:
-                log("CSV invalide : colonnes manquantes", "red")
+                log("Erreur : colonnes 'hostname' et 'ip' manquantes", "red")
                 time.sleep(SCAN_FREQUENCE_MIN * 60)
                 continue
 
             log(f"--- Scan à {datetime.now().strftime('%H:%M:%S')} ---", "blue")
             for _, row in df.iterrows():
-                nom = str(row["hostname"])
-                ip = str(row["ip"])
-                log(f"Ping {nom} ({ip})...", "blue")
+                nom = str(row["hostname"]).strip()
+                ip = str(row["ip"]).strip()
 
+                if not nom or not ip:
+                    log("Ligne incomplète dans le CSV (ignorée)", "orange")
+                    continue
+
+                log(f"Ping {nom} ({ip})...", "blue")
                 if ping_host(ip):
                     log(f"{nom} ({ip}) répond.", "green")
                 else:
@@ -124,6 +121,7 @@ def surveiller():
                 return
             time.sleep(1)
 
+# --- Fermeture propre ---
 def on_close():
     global surveillance_active
     surveillance_active = False
