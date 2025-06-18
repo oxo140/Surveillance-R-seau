@@ -1,6 +1,3 @@
-## 📄 `README.md` — Projet : Supervision Réseau par CSV
-
-````markdown
 # 🛰️ Supervision Réseau Automatisée (Ping + Alerte Email)
 
 Ce projet est une application Python avec interface graphique (Tkinter) qui :
