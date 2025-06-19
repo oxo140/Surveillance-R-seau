@@ -85,7 +85,7 @@ pip install python-dotenv
    EMAIL_DESTINATAIRE = "adresse@destinataire.com"
    ```
 
-⚠️ **Ne jamais utiliser ton vrai mot de passe Gmail !**
+⚠️ **Ne jamais utiliser le vrai mot de passe Gmail !**
 
 ---
 
@@ -95,7 +95,7 @@ pip install python-dotenv
 python ton_script.py
 ```
 
-Ou double-clique sur le fichier `.py` si Python est bien associé.
+ double-clique sur le fichier `.py` si Python est bien associé.
 
 ---
 
@@ -115,6 +115,6 @@ Ou double-clique sur le fichier `.py` si Python est bien associé.
 
 ## 🛑 Arrêter proprement
 
-Ferme simplement la fenêtre de l'application. Le thread de surveillance se termine automatiquement.
+Fermé simplement la fenêtre de l'application. Le thread de surveillance se termine automatiquement.
 
 ---
