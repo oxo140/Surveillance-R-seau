@@ -4,7 +4,7 @@ import platform
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 import pandas as pd
 import time
 import threading
@@ -19,6 +19,9 @@ CSV_PATH = "equipements.csv"
 LOG_FILE = "log_surveillance.txt"
 SCAN_FREQUENCE_MIN = 1
 ANTI_SPAM_MIN = 60
+
+HEURE_DEBUT_SILENCE = dt_time(22, 0)
+HEURE_FIN_SILENCE = dt_time(7, 0)
 
 derniers_alertes = {}
 surveillance_active = True
@@ -44,8 +47,19 @@ def log(message, couleur="black"):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(ligne + "\n")
 
+# --- Vérifie si envoi de mail est permis ---
+def mail_autorise():
+    now = datetime.now().time()
+    if HEURE_DEBUT_SILENCE < HEURE_FIN_SILENCE:
+        return not (HEURE_DEBUT_SILENCE <= now < HEURE_FIN_SILENCE)
+    else:
+        return not (now >= HEURE_DEBUT_SILENCE or now < HEURE_FIN_SILENCE)
+
 # --- Envoi de mail (sans pièce jointe) ---
 def envoyer_mail(nom, ip):
+    if not mail_autorise():
+        log(f"Mail non envoyé pour {nom} ({ip}) - en dehors des heures autorisées", "orange")
+        return
     try:
         msg = MIMEMultipart()
         msg["From"] = EMAIL_EXPEDITEUR
