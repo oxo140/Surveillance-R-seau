@@ -21,6 +21,27 @@ Ce projet est une application Python avec interface graphique (Tkinter) qui :
 
 ---
 
+---
+## 🖥️ Variables
+🔁 SCAN_FREQUENCE_MIN = 1
+
+    Fréquence de balayage réseau : une vérification est effectuée toutes les 1 minute.
+
+🚫 ANTI_SPAM_MIN = 60
+
+    Délai minimum entre deux alertes e-mail pour une même adresse IP : 60 minutes.
+
+    Cela évite l'envoi répété d'e-mails pour un même problème persistant.
+
+🌙 HEURE_DEBUT_SILENCE = 22h00
+🌅 HEURE_FIN_SILENCE = 07h00
+
+    Durant cette plage horaire (22h00 à 07h00), aucun e-mail ne sera envoyé, même si un hôte ne répond pas.
+
+    La surveillance reste active, mais les notifications par e-mail sont suspendues pour éviter les dérangements nocturnes.
+
+---
+
 ## 🗃️ Exemple de fichier `equipements.csv`
 
 ```csv
