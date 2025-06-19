@@ -19,7 +19,6 @@ Ce projet est une application Python avec interface graphique (Tkinter) qui :
   - Le fichier `log_surveillance.txt` est joint à l'email
 - Un délai d'**1 heure** est appliqué avant d'autoriser un nouveau mail pour une IP déjà signalée
 
----
 
 ---
 ## 🖥️ Variables
