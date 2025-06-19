@@ -37,15 +37,46 @@ log_text.config(state=tk.DISABLED)
 
 # --- Log écran + fichier ---
 def log(message, couleur="black"):
-    timestamp = datetime.now().strftime("%H:%M:%S")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ligne = f"[{timestamp}] {message}"
     log_text.config(state=tk.NORMAL)
     log_text.insert(tk.END, ligne + "\n", couleur)
     log_text.tag_config(couleur, foreground=couleur)
     log_text.see(tk.END)
     log_text.config(state=tk.DISABLED)
+
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(ligne + "\n")
+
+    nettoyer_anciens_logs()
+
+# --- Nettoyage ancien logs ---
+def nettoyer_anciens_logs():
+    if not os.path.exists(LOG_FILE):
+        return
+
+    lignes_valides = []
+    now = datetime.now()
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            for ligne in f:
+                if ligne.startswith("["):
+                    try:
+                        date_str = ligne.split("]")[0].strip("[")
+                        date_log = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                        if now - date_log <= timedelta(days=7):
+                            lignes_valides.append(ligne)
+                    except ValueError:
+                        pass  # ligne invalide
+    except Exception as e:
+        log(f"Erreur lecture log pour nettoyage : {e}", "red")
+        return
+
+    try:
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.writelines(lignes_valides)
+    except Exception as e:
+        log(f"Erreur écriture log nettoyé : {e}", "red")
 
 # --- Vérifie si envoi de mail est permis ---
 def mail_autorise():
