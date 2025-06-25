@@ -17,13 +17,14 @@ EMAIL_DESTINATAIRE = "destinataire@exemple.com"
 
 CSV_PATH = "equipements.csv"
 LOG_FILE = "log_surveillance.txt"
-SCAN_FREQUENCE_MIN = 1
-ANTI_SPAM_MIN = 60
+SCAN_FREQUENCE_MIN = 2
+ANTI_SPAM_MIN = 120
 
-HEURE_DEBUT_SILENCE = dt_time(22, 0)
-HEURE_FIN_SILENCE = dt_time(7, 0)
+HEURE_DEBUT_SILENCE = dt_time(21, 30)
+HEURE_FIN_SILENCE = dt_time(7, 30)
 
 derniers_alertes = {}
+anti_spam_reset = {}
 surveillance_active = True
 
 # --- Interface graphique ---
@@ -86,8 +87,8 @@ def mail_autorise():
     else:
         return not (now >= HEURE_DEBUT_SILENCE or now < HEURE_FIN_SILENCE)
 
-# --- Envoi de mail (sans pièce jointe) ---
-def envoyer_mail(nom, ip):
+# --- Envoi de mail ---
+def envoyer_mail(nom, ip, message):
     if not mail_autorise():
         log(f"Mail non envoyé pour {nom} ({ip}) - en dehors des heures autorisées", "orange")
         return
@@ -95,9 +96,8 @@ def envoyer_mail(nom, ip):
         msg = MIMEMultipart()
         msg["From"] = EMAIL_EXPEDITEUR
         msg["To"] = EMAIL_DESTINATAIRE
-        msg["Subject"] = f"Alerte : {nom} ({ip}) injoignable"
-        corps = f"L'hôte {nom} ({ip}) ne répond pas après 4 tentatives de ping."
-        msg.attach(MIMEText(corps, "plain"))
+        msg["Subject"] = f"Alerte : {nom} ({ip})"
+        msg.attach(MIMEText(message, "plain"))
 
         with smtplib.SMTP("smtp.gmail.com", 587) as serveur:
             serveur.starttls()
@@ -111,7 +111,7 @@ def envoyer_mail(nom, ip):
 # --- Fonction ping ---
 def ping_host(ip):
     param = "-n" if platform.system().lower() == "windows" else "-c"
-    for _ in range(4):
+    for _ in range(10):
         result = subprocess.run(["ping", param, "1", ip],
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
@@ -149,11 +149,14 @@ def surveiller():
                 log(f"Ping {nom} ({ip})...", "blue")
                 if ping_host(ip):
                     log(f"{nom} ({ip}) répond.", "green")
+                    if ip in derniers_alertes:
+                        envoyer_mail(nom, ip, f"L'hôte {nom} ({ip}) répond à nouveau au ping.")
+                        del derniers_alertes[ip]
                 else:
                     now = datetime.now()
                     derniere = derniers_alertes.get(ip)
                     if not derniere or (now - derniere) >= timedelta(minutes=ANTI_SPAM_MIN):
-                        envoyer_mail(nom, ip)
+                        envoyer_mail(nom, ip, f"L'hôte {nom} ({ip}) ne répond pas après 10 tentatives de ping.")
                         derniers_alertes[ip] = now
                     else:
                         log(f"{nom} ({ip}) ne répond pas, mais anti-spam actif (moins de {ANTI_SPAM_MIN} min)", "orange")
