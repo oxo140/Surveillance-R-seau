@@ -12,22 +12,29 @@ import os
 
 # --- Configuration ---
 EMAIL_EXPEDITEUR = "EMAIL_EXPEDITEUR@gmail.com"
-EMAIL_MDP_APP = "mots de passe gmail"
+EMAIL_MDP_APP = "gyiq ngrk epbe tcvn"
 EMAIL_DESTINATAIRE = "EMAIL_DESTINATAIRE@gmail.com"
 
 CSV_PATH = "equipements.csv"
 LOG_FILE = "log_surveillance.txt"
-SCAN_FREQUENCE_MIN = 5
-PING_COUNT = 10
-MAX_FAILURES = 4
-ANTI_SPAM_MIN = 90
+SCAN_FREQUENCE_MIN = 5  # Fréquence de scan en minutes
+PING_COUNT = 10  # Nombre de pings par test
+MAX_FAILURES = 4  # Nombre d'échecs consécutifs avant envoi de mail
+ANTI_SPAM_MIN = 90  # Délai anti-spam en minutes
 
 HEURE_DEBUT_SILENCE = dt_time(21, 30)
 HEURE_FIN_SILENCE = dt_time(7, 30)
 
-# Dictionnaires pour suivre l'état des équipements
+# Structure pour suivre l'état des équipements
 equipment_status = {
-    # Format: {ip: {'failures': 0, 'was_down': False, 'hostname': "nom", 'last_failure': datetime, 'last_alert': datetime}}
+    # Format: {ip: {
+    #   'hostname': str,
+    #   'failures': int,
+    #   'was_down': bool,
+    #   'last_failure': datetime,
+    #   'last_alert': datetime,
+    #   'had_enough_failures': bool
+    # }}
 }
 
 surveillance_active = True
@@ -42,6 +49,7 @@ log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 log_text.config(state=tk.DISABLED)
 
 def log(message, couleur="black"):
+    """Enregistre un message dans l'interface et le fichier de log"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ligne = f"[{timestamp}] {message}"
     log_text.config(state=tk.NORMAL)
@@ -54,6 +62,7 @@ def log(message, couleur="black"):
         f.write(ligne + "\n")
 
 def envoyer_mail(ip, status):
+    """Envoie un mail d'alerte ou de rétablissement"""
     now = datetime.now()
     current_time = now.time()
 
@@ -100,6 +109,7 @@ def envoyer_mail(ip, status):
         return False
 
 def ping_host(ip):
+    """Effectue un ping sur l'hôte spécifié"""
     param = '-n' if platform.system().lower() == 'windows' else '-c'
     command = ['ping', param, str(PING_COUNT), ip]
 
@@ -110,6 +120,7 @@ def ping_host(ip):
         return False
 
 def surveiller():
+    """Fonction principale de surveillance"""
     global surveillance_active
 
     while surveillance_active:
@@ -135,9 +146,10 @@ def surveiller():
 
                 if ip not in equipment_status:
                     equipment_status[ip] = {
+                        'hostname': hostname,
                         'failures': 0,
                         'was_down': False,
-                        'hostname': hostname,
+                        'had_enough_failures': False,
                         'last_failure': None,
                         'last_alert': None
                     }
@@ -146,27 +158,34 @@ def surveiller():
             for _, row in df.iterrows():
                 ip = str(row['ip']).strip()
                 hostname = str(row['hostname']).strip()
-                equipement_id = f"{hostname} ({ip})"
+                equipement_id = f"{hostname} ({ip})" if hostname else ip
 
                 if ping_host(ip):
                     log(f"OK: {equipement_id} répond", "green")
 
-                    if equipment_status[ip]['was_down']:
-                        # Équipement redevenu disponible
+                    # Vérifier si l'équipement était en panne avec suffisamment d'échecs
+                    if equipment_status[ip]['was_down'] and equipment_status[ip]['had_enough_failures']:
+                        # Équipement redevenu disponible après suffisamment d'échecs
                         if envoyer_mail(ip, "up"):
                             equipment_status[ip]['was_down'] = False
+                            equipment_status[ip]['had_enough_failures'] = False
                         equipment_status[ip]['failures'] = 0
                     else:
-                        # Équipement toujours disponible
+                        # Équipement toujours disponible ou pas assez d'échecs
                         equipment_status[ip]['failures'] = 0
+                        equipment_status[ip]['was_down'] = False
                 else:
+                    # Échec de ping
                     equipment_status[ip]['failures'] += 1
                     equipment_status[ip]['last_failure'] = datetime.now()
                     equipment_status[ip]['was_down'] = True
-                    log(f"ERREUR: {equipement_id} ne répond pas (échecs: {equipment_status[ip]['failures']})", "red")
 
+                    # Vérifier si on a atteint le nombre maximum d'échecs
                     if equipment_status[ip]['failures'] >= MAX_FAILURES:
+                        equipment_status[ip]['had_enough_failures'] = True
                         envoyer_mail(ip, "down")
+
+                    log(f"ERREUR: {equipement_id} ne répond pas (échecs: {equipment_status[ip]['failures']})", "red")
 
         except Exception as e:
             log(f"Erreur dans le cycle de surveillance: {str(e)}", "red")
@@ -178,6 +197,7 @@ def surveiller():
             time.sleep(1)
 
 def on_close():
+    """Fermeture propre de l'application"""
     global surveillance_active
     surveillance_active = False
     app.destroy()
