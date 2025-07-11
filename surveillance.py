@@ -11,14 +11,17 @@ import threading
 import os
 
 # --- Configuration ---
-EMAIL_EXPEDITEUR = "expediteur@exemple.com"
-EMAIL_MDP_APP = "mdpexemple"
-EMAIL_DESTINATAIRE = "destinataire@exemple.com"
+EMAIL_EXPEDITEUR = "EMAIL_EXPEDITEUR@gmail.com"
+EMAIL_MDP_APP = "mots de passe gmail"
+EMAIL_DESTINATAIRE = "EMAIL_DESTINATAIRE@gmail.com"
 
 CSV_PATH = "equipements.csv"
 LOG_FILE = "log_surveillance.txt"
 SCAN_FREQUENCE_MIN = 2
-ANTI_SPAM_MIN = 120
+ANTI_SPAM_MIN = 90
+PING_SERIES = 4  # Nombre de séries de pings à effectuer
+PING_PER_SERIE = 10  # Nombre de pings par série
+DELAI_ENTRE_SERIES = 5  # Délai en secondes entre les séries
 
 HEURE_DEBUT_SILENCE = dt_time(21, 30)
 HEURE_FIN_SILENCE = dt_time(7, 30)
@@ -36,8 +39,8 @@ log_text = tk.Text(app, height=25, wrap="word")
 log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 log_text.config(state=tk.DISABLED)
 
-# --- Log écran + fichier ---
 def log(message, couleur="black"):
+    """Enregistre un message dans l'interface et le fichier de log"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ligne = f"[{timestamp}] {message}"
     log_text.config(state=tk.NORMAL)
@@ -51,8 +54,8 @@ def log(message, couleur="black"):
 
     nettoyer_anciens_logs()
 
-# --- Nettoyage ancien logs ---
 def nettoyer_anciens_logs():
+    """Nettoie les logs plus vieux que 7 jours"""
     if not os.path.exists(LOG_FILE):
         return
 
@@ -68,7 +71,7 @@ def nettoyer_anciens_logs():
                         if now - date_log <= timedelta(days=7):
                             lignes_valides.append(ligne)
                     except ValueError:
-                        pass  # ligne invalide
+                        pass
     except Exception as e:
         log(f"Erreur lecture log pour nettoyage : {e}", "red")
         return
@@ -79,19 +82,20 @@ def nettoyer_anciens_logs():
     except Exception as e:
         log(f"Erreur écriture log nettoyé : {e}", "red")
 
-# --- Vérifie si envoi de mail est permis ---
 def mail_autorise():
+    """Vérifie si l'envoi de mail est autorisé selon les heures de silence"""
     now = datetime.now().time()
     if HEURE_DEBUT_SILENCE < HEURE_FIN_SILENCE:
         return not (HEURE_DEBUT_SILENCE <= now < HEURE_FIN_SILENCE)
     else:
         return not (now >= HEURE_DEBUT_SILENCE or now < HEURE_FIN_SILENCE)
 
-# --- Envoi de mail ---
 def envoyer_mail(nom, ip, message):
+    """Envoie un email d'alerte si autorisé"""
     if not mail_autorise():
         log(f"Mail non envoyé pour {nom} ({ip}) - en dehors des heures autorisées", "orange")
         return
+
     try:
         msg = MIMEMultipart()
         msg["From"] = EMAIL_EXPEDITEUR
@@ -108,21 +112,33 @@ def envoyer_mail(nom, ip, message):
     except Exception as e:
         log(f"Erreur envoi mail : {e}", "red")
 
-# --- Fonction ping ---
 def ping_host(ip):
+    """Effectue plusieurs séries de pings pour vérifier la disponibilité"""
     param = "-n" if platform.system().lower() == "windows" else "-c"
-    for _ in range(10):
-        result = subprocess.run(["ping", param, "1", ip],
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                text=True)
-        if "TTL=" in result.stdout or "ttl=" in result.stdout:
-            return True
-        time.sleep(1)
+    successes = 0
+
+    for serie in range(PING_SERIES):
+        log(f"Série de ping {serie+1}/{PING_SERIES} pour {ip}...", "blue")
+        for _ in range(PING_PER_SERIE):
+            result = subprocess.run(["ping", param, "1", ip],
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE,
+                                  text=True)
+            if "TTL=" in result.stdout or "ttl=" in result.stdout:
+                successes += 1
+                break  # Si un ping réussit, on passe à la série suivante
+            time.sleep(1)
+
+        if successes > 0:
+            return True  # Si au moins une série a réussi
+
+        if serie < PING_SERIES - 1:  # Pas besoin d'attendre après la dernière série
+            time.sleep(DELAI_ENTRE_SERIES)
+
     return False
 
-# --- Boucle de surveillance ---
 def surveiller():
+    """Boucle principale de surveillance des équipements"""
     global surveillance_active
     while surveillance_active:
         if not os.path.exists(CSV_PATH):
@@ -146,17 +162,19 @@ def surveiller():
                     log("Ligne incomplète dans le CSV (ignorée)", "orange")
                     continue
 
-                log(f"Ping {nom} ({ip})...", "blue")
+                log(f"Test de connexion pour {nom} ({ip})...", "blue")
                 if ping_host(ip):
                     log(f"{nom} ({ip}) répond.", "green")
                     if ip in derniers_alertes:
-                        envoyer_mail(nom, ip, f"L'hôte {nom} ({ip}) répond à nouveau au ping.")
+                        envoyer_mail(nom, ip, f"L'hôte {nom} ({ip}) répond à nouveau après une indisponibilité.")
                         del derniers_alertes[ip]
                 else:
                     now = datetime.now()
                     derniere = derniers_alertes.get(ip)
                     if not derniere or (now - derniere) >= timedelta(minutes=ANTI_SPAM_MIN):
-                        envoyer_mail(nom, ip, f"L'hôte {nom} ({ip}) ne répond pas après 10 tentatives de ping.")
+                        message = (f"L'hôte {nom} ({ip}) ne répond pas après "
+                                  f"{PING_SERIES} séries de {PING_PER_SERIE} pings chacune.")
+                        envoyer_mail(nom, ip, message)
                         derniers_alertes[ip] = now
                     else:
                         log(f"{nom} ({ip}) ne répond pas, mais anti-spam actif (moins de {ANTI_SPAM_MIN} min)", "orange")
@@ -164,18 +182,20 @@ def surveiller():
         except Exception as e:
             log(f"Erreur de traitement : {e}", "red")
 
+        # Attente avant le prochain scan
         for _ in range(SCAN_FREQUENCE_MIN * 60):
             if not surveillance_active:
                 return
             time.sleep(1)
 
-# --- Fermeture propre ---
 def on_close():
+    """Fermeture propre de l'application"""
     global surveillance_active
     surveillance_active = False
     app.destroy()
 
-# --- Lancement automatique ---
-threading.Thread(target=surveiller, daemon=True).start()
-app.protocol("WM_DELETE_WINDOW", on_close)
-app.mainloop()
+if __name__ == "__main__":
+    # Lancement automatique de la surveillance
+    threading.Thread(target=surveiller, daemon=True).start()
+    app.protocol("WM_DELETE_WINDOW", on_close)
+    app.mainloop()
