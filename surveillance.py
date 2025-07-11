@@ -13,26 +13,28 @@ import os
 # --- Configuration ---
 EMAIL_EXPEDITEUR = "EMAIL_EXPEDITEUR@gmail.com"
 EMAIL_MDP_APP = "mots de passe gmail"
-EMAIL_DESTINATAIRE = "EMAIL_DESTINATAIRE@gmail.com"
+EMAIL_DESTINATAIRE = "EMAIL_DESTINATAIRE@interieur.gouv.fr"
 
 CSV_PATH = "equipements.csv"
 LOG_FILE = "log_surveillance.txt"
-SCAN_FREQUENCE_MIN = 2
+SCAN_FREQUENCE_MIN = 5
+PING_COUNT = 10
+MAX_FAILURES = 4
 ANTI_SPAM_MIN = 90
-PING_SERIES = 4  # Nombre de séries de pings à effectuer
-PING_PER_SERIE = 10  # Nombre de pings par série
-DELAI_ENTRE_SERIES = 5  # Délai en secondes entre les séries
 
 HEURE_DEBUT_SILENCE = dt_time(21, 30)
 HEURE_FIN_SILENCE = dt_time(7, 30)
 
-derniers_alertes = {}
-anti_spam_reset = {}
+# Dictionnaires pour suivre l'état des équipements
+equipment_status = {
+    # Format: {ip: {'failures': 0, 'was_down': False, 'hostname': "nom", 'last_failure': datetime, 'last_alert': datetime}}
+}
+
 surveillance_active = True
 
-# --- Interface graphique ---
+# Interface graphique
 app = tk.Tk()
-app.title("Surveillance Réseau Automatisée")
+app.title("Surveillance Réseau")
 app.geometry("800x500")
 
 log_text = tk.Text(app, height=25, wrap="word")
@@ -40,7 +42,6 @@ log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 log_text.config(state=tk.DISABLED)
 
 def log(message, couleur="black"):
-    """Enregistre un message dans l'interface et le fichier de log"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ligne = f"[{timestamp}] {message}"
     log_text.config(state=tk.NORMAL)
@@ -52,150 +53,136 @@ def log(message, couleur="black"):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(ligne + "\n")
 
-    nettoyer_anciens_logs()
-
-def nettoyer_anciens_logs():
-    """Nettoie les logs plus vieux que 7 jours"""
-    if not os.path.exists(LOG_FILE):
-        return
-
-    lignes_valides = []
+def envoyer_mail(ip, status):
     now = datetime.now()
-    try:
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            for ligne in f:
-                if ligne.startswith("["):
-                    try:
-                        date_str = ligne.split("]")[0].strip("[")
-                        date_log = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-                        if now - date_log <= timedelta(days=7):
-                            lignes_valides.append(ligne)
-                    except ValueError:
-                        pass
-    except Exception as e:
-        log(f"Erreur lecture log pour nettoyage : {e}", "red")
-        return
+    current_time = now.time()
 
-    try:
-        with open(LOG_FILE, "w", encoding="utf-8") as f:
-            f.writelines(lignes_valides)
-    except Exception as e:
-        log(f"Erreur écriture log nettoyé : {e}", "red")
-
-def mail_autorise():
-    """Vérifie si l'envoi de mail est autorisé selon les heures de silence"""
-    now = datetime.now().time()
+    # Vérification période de silence
     if HEURE_DEBUT_SILENCE < HEURE_FIN_SILENCE:
-        return not (HEURE_DEBUT_SILENCE <= now < HEURE_FIN_SILENCE)
+        if HEURE_DEBUT_SILENCE <= current_time <= HEURE_FIN_SILENCE:
+            return False
     else:
-        return not (now >= HEURE_DEBUT_SILENCE or now < HEURE_FIN_SILENCE)
+        if current_time >= HEURE_DEBUT_SILENCE or current_time <= HEURE_FIN_SILENCE:
+            return False
 
-def envoyer_mail(nom, ip, message):
-    """Envoie un email d'alerte si autorisé"""
-    if not mail_autorise():
-        log(f"Mail non envoyé pour {nom} ({ip}) - en dehors des heures autorisées", "orange")
-        return
+    # Vérification anti-spam
+    last_alert = equipment_status[ip]['last_alert']
+    if last_alert and (now - last_alert) < timedelta(minutes=ANTI_SPAM_MIN):
+        return False
+
+    # Création du mail
+    hostname = equipment_status[ip]['hostname']
+    equipement_id = f"{hostname} ({ip})" if hostname else ip
+
+    message_email = MIMEMultipart()
+    message_email["From"] = EMAIL_EXPEDITEUR
+    message_email["To"] = EMAIL_DESTINATAIRE
+
+    if status == "down":
+        subject = f"ALERTE: Équipement hors ligne - {equipement_id}"
+        body = f"L'équipement {equipement_id} est hors ligne après {MAX_FAILURES} tests consécutifs."
+    else:
+        subject = f"RÉTABLISSEMENT: Équipement de nouveau en ligne - {equipement_id}"
+        body = f"L'équipement {equipement_id} est de nouveau en ligne après avoir été hors service."
+
+    message_email["Subject"] = subject
+    message_email.attach(MIMEText(body, "plain"))
 
     try:
-        msg = MIMEMultipart()
-        msg["From"] = EMAIL_EXPEDITEUR
-        msg["To"] = EMAIL_DESTINATAIRE
-        msg["Subject"] = f"Alerte : {nom} ({ip})"
-        msg.attach(MIMEText(message, "plain"))
-
-        with smtplib.SMTP("smtp.gmail.com", 587) as serveur:
-            serveur.starttls()
-            serveur.login(EMAIL_EXPEDITEUR, EMAIL_MDP_APP)
-            serveur.send_message(msg)
-
-        log(f"Mail envoyé pour {nom} ({ip})", "red")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_EXPEDITEUR, EMAIL_MDP_APP)
+            server.sendmail(EMAIL_EXPEDITEUR, EMAIL_DESTINATAIRE, message_email.as_string())
+        log(f"Mail envoyé: {equipement_id} - {status}", "green")
+        equipment_status[ip]['last_alert'] = now
+        return True
     except Exception as e:
-        log(f"Erreur envoi mail : {e}", "red")
+        log(f"Erreur envoi mail pour {equipement_id}: {str(e)}", "red")
+        return False
 
 def ping_host(ip):
-    """Effectue plusieurs séries de pings pour vérifier la disponibilité"""
-    param = "-n" if platform.system().lower() == "windows" else "-c"
-    successes = 0
+    param = '-n' if platform.system().lower() == 'windows' else '-c'
+    command = ['ping', param, str(PING_COUNT), ip]
 
-    for serie in range(PING_SERIES):
-        log(f"Série de ping {serie+1}/{PING_SERIES} pour {ip}...", "blue")
-        for _ in range(PING_PER_SERIE):
-            result = subprocess.run(["ping", param, "1", ip],
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE,
-                                  text=True)
-            if "TTL=" in result.stdout or "ttl=" in result.stdout:
-                successes += 1
-                break  # Si un ping réussit, on passe à la série suivante
-            time.sleep(1)
-
-        if successes > 0:
-            return True  # Si au moins une série a réussi
-
-        if serie < PING_SERIES - 1:  # Pas besoin d'attendre après la dernière série
-            time.sleep(DELAI_ENTRE_SERIES)
-
-    return False
+    try:
+        output = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        return output.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 def surveiller():
-    """Boucle principale de surveillance des équipements"""
     global surveillance_active
-    while surveillance_active:
-        if not os.path.exists(CSV_PATH):
-            log("Fichier equipements.csv non trouvé", "red")
-            time.sleep(SCAN_FREQUENCE_MIN * 60)
-            continue
 
+    while surveillance_active:
         try:
-            df = pd.read_csv(CSV_PATH)
-            if "hostname" not in df.columns or "ip" not in df.columns:
-                log("Erreur : colonnes 'hostname' et 'ip' manquantes", "red")
-                time.sleep(SCAN_FREQUENCE_MIN * 60)
+            # Chargement du fichier CSV
+            try:
+                df = pd.read_csv(CSV_PATH)
+                if 'ip' not in df.columns or 'hostname' not in df.columns:
+                    log("Erreur: Le fichier CSV doit contenir les colonnes 'hostname' et 'ip'", "red")
+                    time.sleep(60)
+                    continue
+            except Exception as e:
+                log(f"Erreur lecture CSV: {str(e)}", "red")
+                time.sleep(60)
                 continue
 
-            log(f"--- Scan à {datetime.now().strftime('%H:%M:%S')} ---", "blue")
+            log(f"Début du cycle de surveillance - {len(df)} équipements à vérifier", "blue")
+
+            # Initialisation des équipements
             for _, row in df.iterrows():
-                nom = str(row["hostname"]).strip()
-                ip = str(row["ip"]).strip()
+                ip = str(row['ip']).strip()
+                hostname = str(row['hostname']).strip()
 
-                if not nom or not ip:
-                    log("Ligne incomplète dans le CSV (ignorée)", "orange")
-                    continue
+                if ip not in equipment_status:
+                    equipment_status[ip] = {
+                        'failures': 0,
+                        'was_down': False,
+                        'hostname': hostname,
+                        'last_failure': None,
+                        'last_alert': None
+                    }
 
-                log(f"Test de connexion pour {nom} ({ip})...", "blue")
+            # Vérification des équipements
+            for _, row in df.iterrows():
+                ip = str(row['ip']).strip()
+                hostname = str(row['hostname']).strip()
+                equipement_id = f"{hostname} ({ip})"
+
                 if ping_host(ip):
-                    log(f"{nom} ({ip}) répond.", "green")
-                    if ip in derniers_alertes:
-                        envoyer_mail(nom, ip, f"L'hôte {nom} ({ip}) répond à nouveau après une indisponibilité.")
-                        del derniers_alertes[ip]
-                else:
-                    now = datetime.now()
-                    derniere = derniers_alertes.get(ip)
-                    if not derniere or (now - derniere) >= timedelta(minutes=ANTI_SPAM_MIN):
-                        message = (f"L'hôte {nom} ({ip}) ne répond pas après "
-                                  f"{PING_SERIES} séries de {PING_PER_SERIE} pings chacune.")
-                        envoyer_mail(nom, ip, message)
-                        derniers_alertes[ip] = now
+                    log(f"OK: {equipement_id} répond", "green")
+
+                    if equipment_status[ip]['was_down']:
+                        # Équipement redevenu disponible
+                        if envoyer_mail(ip, "up"):
+                            equipment_status[ip]['was_down'] = False
+                        equipment_status[ip]['failures'] = 0
                     else:
-                        log(f"{nom} ({ip}) ne répond pas, mais anti-spam actif (moins de {ANTI_SPAM_MIN} min)", "orange")
+                        # Équipement toujours disponible
+                        equipment_status[ip]['failures'] = 0
+                else:
+                    equipment_status[ip]['failures'] += 1
+                    equipment_status[ip]['last_failure'] = datetime.now()
+                    equipment_status[ip]['was_down'] = True
+                    log(f"ERREUR: {equipement_id} ne répond pas (échecs: {equipment_status[ip]['failures']})", "red")
+
+                    if equipment_status[ip]['failures'] >= MAX_FAILURES:
+                        envoyer_mail(ip, "down")
 
         except Exception as e:
-            log(f"Erreur de traitement : {e}", "red")
+            log(f"Erreur dans le cycle de surveillance: {str(e)}", "red")
 
-        # Attente avant le prochain scan
+        # Attente avant le prochain cycle
         for _ in range(SCAN_FREQUENCE_MIN * 60):
             if not surveillance_active:
                 return
             time.sleep(1)
 
 def on_close():
-    """Fermeture propre de l'application"""
     global surveillance_active
     surveillance_active = False
     app.destroy()
 
 if __name__ == "__main__":
-    # Lancement automatique de la surveillance
     threading.Thread(target=surveiller, daemon=True).start()
     app.protocol("WM_DELETE_WINDOW", on_close)
     app.mainloop()
