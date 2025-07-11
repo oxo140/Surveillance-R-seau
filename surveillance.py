@@ -12,7 +12,7 @@ import os
 
 # --- Configuration ---
 EMAIL_EXPEDITEUR = "EMAIL_EXPEDITEUR@gmail.com"
-EMAIL_MDP_APP = "mots de passe gmail"
+EMAIL_MDP_APP = "motsde passe gmail"
 EMAIL_DESTINATAIRE = "EMAIL_DESTINATAIRE@gmail.com"
 
 CSV_PATH = "equipements.csv"
